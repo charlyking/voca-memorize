@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voca Memorize</title>
+<style>
+:root{--bg:#f7f7fb;--card:#fff;--fg:#1c1c28;--mute:#6b6b80;--acc:#5b5bf0;--ok:#16a34a;--bad:#dc2626;--bd:#e4e4ee}
+@media (prefers-color-scheme:dark){:root{--bg:#14141c;--card:#1e1e2a;--fg:#ececf5;--mute:#9a9ab0;--bd:#2c2c3c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Noto Sans TC",sans-serif}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:8px 0 12px}
+.stats{display:flex;gap:8px;margin-bottom:12px}
+.stat{flex:1;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:8px;text-align:center}
+.stat b{display:block;font-size:20px}.stat span{color:var(--mute);font-size:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:32px 16px;text-align:center;min-height:180px;display:flex;flex-direction:column;justify-content:center;gap:8px;cursor:pointer}
+.card .w{font-size:32px;font-weight:700;word-break:break-word}
+.card .m{font-size:20px;color:var(--mute);word-break:break-word}
+.hint{color:var(--mute);font-size:13px}
+button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer;background:var(--acc);color:#fff}
+button.sec{background:var(--card);color:var(--fg);border:1px solid var(--bd)}
+button:disabled{opacity:.4;cursor:default}
+.row{display:flex;gap:8px;margin-top:12px}.row button{flex:1}
+.ok{background:var(--ok)}.bad{background:var(--bad)}
+form{display:grid;gap:8px;margin-top:20px}
+input{font:inherit;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg);width:100%}
+ul{list-style:none;padding:0;margin:12px 0}
+li{display:flex;justify-content:space-between;gap:8px;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;margin-bottom:6px}
+li small{color:var(--mute)}li button{padding:2px 10px;background:transparent;color:var(--bad);border:0}
+details{margin-top:20px}summary{cursor:pointer;color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+  <h1>📚 Voca Memorize</h1>
+  <div class="stats">
+    <div class="stat"><b id="sDue">0</b><span>待複習</span></div>
+    <div class="stat"><b id="sTotal">0</b><span>總單字</span></div>
+    <div class="stat"><b id="sStreak">0</b><span>連續天數</span></div>
+  </div>
+
+  <div id="card" class="card" role="button" tabindex="0" aria-label="翻面">
+    <div class="w" id="cw"></div>
+    <div class="m" id="cm"></div>
+    <div class="hint" id="ch"></div>
+  </div>
+  <div class="row">
+    <button id="bBad" class="bad" disabled>不記得</button>
+    <button id="bOk" class="ok" disabled>記得</button>
+  </div>
+
+  <form id="addForm">
+    <input id="inW" placeholder="單字 (例如 ephemeral)" required maxlength="100" autocomplete="off">
+    <input id="inM" placeholder="意思 (例如 短暫的)" required maxlength="200" autocomplete="off">
+    <button type="submit">新增單字</button>
+  </form>
+
+  <details>
+    <summary>單字清單 / 匯出入</summary>
+    <ul id="list"></ul>
+    <div class="row">
+      <button class="sec" id="bExp">匯出 JSON</button>
+      <button class="sec" id="bImp">匯入 JSON</button>
+    </div>
+    <input type="file" id="file" accept="application/json" hidden>
+  </details>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var KEY="voca-memorize-v1", DAY=86400000;
+  // Leitner boxes: days until next review
+  var INTERVALS=[0,1,2,4,8,16,32];
+
+  function load(){
+    try{
+      var d=JSON.parse(localStorage.getItem(KEY));
+      if(d&&Array.isArray(d.words)) return {words:d.words.filter(valid),streak:d.streak|0,last:d.last||""};
+    }catch(e){}
+    return {words:[],streak:0,last:""};
+  }
+  function valid(w){return w&&typeof w.w==="string"&&typeof w.m==="string"&&typeof w.id==="string"}
+  var state=load();
+  function save(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}}
+  function $(id){return document.getElementById(id)}
+  function today(){var d=new Date();return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate()}
+  function newId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+  function normBox(w){var b=w.box|0;return Math.max(0,Math.min(INTERVALS.length-1,b))}
+  function due(){var now=Date.now();return state.words.filter(function(w){return (w.due||0)<=now})}
+
+  var current=null, flipped=false;
+
+  function pick(){
+    var d=due();
+    if(!d.length){current=null;return}
+    // lowest box first, then earliest due
+    d.sort(function(a,b){return normBox(a)-normBox(b)||(a.due||0)-(b.due||0)});
+    current=d[0];
+  }
+
+  function render(){
+    $("sDue").textContent=due().length;
+    $("sTotal").textContent=state.words.length;
+    $("sStreak").textContent=state.streak;
+    var cw=$("cw"),cm=$("cm"),ch=$("ch");
+    if(!current){
+      cw.textContent=state.words.length?"🎉 今天複習完了":"還沒有單字";
+      cm.textContent="";ch.textContent=state.words.length?"明天再來!":"在下方新增第一個單字";
+    }else{
+      cw.textContent=current.w;
+      cm.textContent=flipped?current.m:"";
+      ch.textContent=flipped?"":"點卡片看意思";
+    }
+    $("bOk").disabled=$("bBad").disabled=!(current&&flipped);
+    renderList();
+  }
+
+  function renderList(){
+    var ul=$("list");ul.textContent="";
+    state.words.forEach(function(w){
+      var li=document.createElement("li");
+      var s=document.createElement("span");
+      s.textContent=w.w+" ";
+      var sm=document.createElement("small");sm.textContent=w.m;s.appendChild(sm);
+      var x=document.createElement("button");x.textContent="✕";x.setAttribute("aria-label","刪除 "+w.w);
+      x.onclick=function(){
+        state.words=state.words.filter(function(v){return v.id!==w.id});
+        save();pick();flipped=false;render();
+      };
+      li.appendChild(s);li.appendChild(x);ul.appendChild(li);
+    });
+  }
+
+  function flip(){if(current){flipped=!flipped;render()}}
+
+  function answer(ok){
+    if(!current||!flipped)return;
+    var b=normBox(current);
+    b=ok?Math.min(b+1,INTERVALS.length-1):0;
+    current.box=b;
+    current.due=ok?Date.now()+INTERVALS[b]*DAY:Date.now()+60000; // wrong: retry in 1 min
+    bumpStreak();
+    save();flipped=false;
+    // avoid immediately repeating the same card if others are due
+    var prev=current;pick();
+    if(current&&prev&&current.id===prev.id){
+      var others=due().filter(function(w){return w.id!==prev.id});
+      if(others.length)current=others[0];
+    }
+    render();
+  }
+
+  function bumpStreak(){
+    var t=today();
+    if(state.last===t)return;
+    var y=new Date(Date.now()-DAY),yk=y.getFullYear()+"-"+(y.getMonth()+1)+"-"+y.getDate();
+    state.streak=state.last===yk?state.streak+1:1;
+    state.last=t;
+  }
+
+  $("card").onclick=flip;
+  $("card").onkeydown=function(e){if(e.key===" "||e.key==="Enter"){e.preventDefault();flip()}};
+  $("bOk").onclick=function(){answer(true)};
+  $("bBad").onclick=function(){answer(false)};
+
+  $("addForm").onsubmit=function(e){
+    e.preventDefault();
+    var w=$("inW").value.trim(),m=$("inM").value.trim();
+    if(!w||!m)return;
+    if(state.words.some(function(v){return v.w.toLowerCase()===w.toLowerCase()})){
+      alert("這個單字已經存在");return;
+    }
+    state.words.push({id:newId(),w:w,m:m,box:0,due:0});
+    save();$("inW").value="";$("inM").value="";
+    if(!current){pick();flipped=false}
+    render();$("inW").focus();
+  };
+
+  $("bExp").onclick=function(){
+    var a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:"application/json"}));
+    a.download="voca-memorize.json";a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href)},1000);
+  };
+  $("bImp").onclick=function(){$("file").click()};
+  $("file").onchange=function(e){
+    var f=e.target.files[0];if(!f)return;
+    var r=new FileReader();
+    r.onload=function(){
+      try{
+        var d=JSON.parse(r.result);
+        if(!d||!Array.isArray(d.words))throw 0;
+        var have={};state.words.forEach(function(v){have[v.w.toLowerCase()]=1});
+        d.words.filter(valid).forEach(function(v){
+          if(!have[v.w.toLowerCase()]){state.words.push({id:newId(),w:v.w,m:v.m,box:normBox(v),due:+v.due||0})}
+        });
+        save();pick();flipped=false;render();
+      }catch(err){alert("檔案格式不正確")}
+      e.target.value="";
+    };
+    r.readAsText(f);
+  };
+
+  pick();render();
+})();
+</script>
+</body>
+</html>
